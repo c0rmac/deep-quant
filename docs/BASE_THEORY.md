@@ -77,7 +77,7 @@ $$dS_t = r S_t dt + \sqrt{V_t} S_t dB_t$$
 
 2.  **Variance ($V_t$)**: 
 
-$$V_t = V_0 \exp\left(\eta Y_t - \frac{1}{2}\eta^2 t^{2H}\right)$ where $Y_t = \int_0^t (t-s)^{H-1/2} \, dW^v_s$$
+$$V_t = V_0 \exp\left(\eta Y_t - \frac{1}{2}\eta^2 t^{2H}\right) \text{ where } Y_t = \int_0^t (t-s)^{H-1/2} \, dW^v_s$$
 
 where:
 * $s_0$: The **initial stock price**.
