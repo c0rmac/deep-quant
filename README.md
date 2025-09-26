@@ -10,7 +10,7 @@
 
 For a deeper dive into the methodologies and advanced usage of the library, please refer to the following documents:
 
-* [**`Base Theory: SDEs and Path Signatures`**](https://www.google.com/search?q=BASE_THEORY.md)**:** The technical details motivating much of the library's foundations.
+* [**`Base Theory: SDEs and Path Signatures`**](./docs/BASE_THEORY.md)**:** The technical details motivating much of the library's foundations.
 
 * [**`Neural Network Solvers`**](https://www.google.com/search?q=NN_THEORY.md)**:** The technical details driving the implementation of the neural network and kernel solvers.
 
