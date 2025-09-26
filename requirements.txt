@@ -1,0 +1,15 @@
+torch~=2.8.0
+numpy~=2.2.6
+torchsde~=0.2.6
+iisignature~=0.24
+scikit-learn~=1.7.2
+rfflearn  # scikit-learn compatible implementation of Random Fourier Features [cite: 162]
+matplotlib~=3.10.6
+seaborn  # Standard library for generating publication-quality static plots [cite: 163]
+pandas~=2.3.2
+yfinance~=0.2.66
+pandas_market_calendars~=5.1.1
+joblib~=1.5.2
+xgboost~=3.0.5
+scipy~=1.16.2
+quantlib~=1.39
