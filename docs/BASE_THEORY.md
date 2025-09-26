@@ -58,6 +58,15 @@ $$dS_t = r S_t dt + \sqrt{V_t} S_t dW^s_t$$
 
 $$dV_t = \kappa(\theta - V_t)dt + \xi\sqrt{V_t}dW^v_t$$
 
+where:
+* $s_0$: The **initial stock price**.
+* $v_0$: The **initial variance**.
+* $\kappa$ (`kappa`): The **rate of mean reversion**, which controls how quickly the variance process returns to its long-term average.
+* $\theta$ (`theta`): The **long-term mean of the variance**.
+* $\xi$ (`xi`): The **volatility of variance**, or "vol of vol," which determines the volatility of the variance process itself.
+* $\rho$ (`rho`): The **correlation** between the asset's random process ($W^s_t$) and the variance's random process ($W^v_t$).
+* $r$: The **risk-free interest rate**.
+
 ### The Rough Bergomi Model (Rough Volatility, $H < 0.5$)
 
 To capture the jagged, "rough" nature of volatility observed in real financial data, the library uses the modern rough Bergomi model. Its core component is the **Volterra process**:
@@ -69,6 +78,14 @@ $$dS_t = r S_t dt + \sqrt{V_t} S_t dB_t$$
 2.  **Variance ($V_t$)**: 
 
 $$V_t = V_0 \exp\left(\eta Y_t - \frac{1}{2}\eta^2 t^{2H}\right)$ where $Y_t = \int_0^t (t-s)^{H-1/2} \, dW^v_s$$
+
+where:
+* $s_0$: The **initial stock price**.
+* $v_0$: The **initial forward variance**.
+* $H$ (`H`): The **Hurst parameter**, which must be in the range (0, 0.5) to model rough volatility.
+* $\eta$ (`eta`): The **volatility of volatility** parameter.
+* $\rho$ (`rho`): The **correlation** between the volatility and price processes.
+* $r$: The **risk-free interest rate**.
 
 ## 3. Path Signatures: A Modern Feature Representation
 
