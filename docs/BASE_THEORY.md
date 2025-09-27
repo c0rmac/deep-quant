@@ -1,4 +1,4 @@
-# Base Theory: SDEs and Path Signatures
+# Foundations: SDEs, Path Signatures and the Dual Problem
 
 This document outlines the core mathematical and financial theories that form the foundation of the DeepQuant library. It covers the models for asset price simulation and the feature representation of price paths.
 
