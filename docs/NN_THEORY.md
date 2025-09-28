@@ -111,3 +111,79 @@ This is exactly the definition of the true option value at time $t$, which is th
 By the principle of backward induction, the value $V_0$ computed by the algorithm is mathematically identical to the theoretical value from the optimal stopping problem. This proves the equivalence:
 
 $$V_{\text{lower}} = \frac{1}{N} \sum_{i=1}^{N} V_0^{(i)} \approx \mathbb{E}\left[e^{-r\hat{\tau}} \text{Payoff}(S_{\hat{\tau}})\right]$$
+
+## 2. The Dual Solver: Approximating the Martingale Integrand
+
+The goal of the dual solver is to find a tight **upper bound** on the American option's price. It achieves this by constructing and optimizing a family of martingales, leveraging the principle of martingale duality for optimal stopping.
+
+---
+### 1. The Theoretical Formulation
+
+The dual approach is based on the theoretical result that the true option price $V_0$ is bounded from above by the expected supremum of the payoff minus any suitable martingale process $M_t$. The tightest bound is found by searching over the entire space of valid martingales, $\mathcal{M}$:
+
+$$V_{\text{upper}} = \inf_{M \in \mathcal{M}} \mathbb{E}\left[\sup_{t \in [0,T]} \left(e^{-rt}\text{Payoff}(S_t) - M_t\right)\right]$$
+
+The main theoretical challenge is solving this minimization problem over the infinite-dimensional space of martingales. To make this tractable, martingales are constructed as stochastic integrals of the form $M_t = \int_0^t \alpha_s dW_s$, where $\alpha_s$ is a process adapted to the filtration $\mathcal{F}_s$ known as the martingale integrand.
+
+### 2. Reformulation via Signatures and Neural Networks
+
+The theoretical challenge is to find the optimal integrand process, $\alpha_s$, which is an abstract process adapted to the filtration $\mathcal{F}_s$. To make this problem computationally tractable, we reformulate it by specifying a concrete, parameterized form for $\alpha_s$.
+
+The requirement that $\alpha_s$ be adapted to the filtration means its value at time $s$ can only depend on the history of the path up to that moment. As established in the primal problem, the **Doob-Dynkin Lemma** provides the rigorous justification for expressing this relationship as a function of the path signature. It guarantees the existence of some unknown function, $g$, such that:
+$$\alpha_s = g\left(\text{sig}(\text{Path})_s\right)$$
+
+#### The Neural Network as a Function Approximator
+The function $g$ is unknown and potentially highly complex. The `DeepSignatureDualSolver` employs a **deep neural network**, $NN_{\theta}$, as a powerful, non-linear function approximator to model $g$. The integrand is therefore approximated as the output of the neural network, which takes the path signature as input:
+$$\alpha_s \approx NN_{\theta}\left(\text{sig}(\text{Path})_s\right)$$
+
+#### The Parameterized Martingale
+By substituting this neural network approximation into the stochastic integral, we obtain the final, parameterized form of the martingale used by the solver. Its behavior is now controlled entirely by the learnable weights, $\theta$, of the neural network:
+$$M_t(\theta) = \int_0^t NN_{\theta}\left(\text{sig}(\text{Path})_s\right) \, dW_s$$In the discrete-time setting of the algorithm, this integral is approximated as a sum of increments over the time steps of the simulation:$$M_t(\theta) = \sum_{j=0}^{t-1} NN_{\theta}(\text{sig}(\text{Path})_j) \cdot \Delta W_{j+1}$$
+where $\Delta W_{j+1}$ is the Brownian increment over the interval $[t_j, t_{j+1}]$.
+
+This reformulation successfully transforms the abstract problem of finding an optimal process $\alpha_s$ into a concrete, finite-dimensional optimization problem: finding the optimal network weights $\theta$.
+
+### 3. The Algorithm: Gradient-Based Optimization
+
+With the martingale parameterized by the neural network, the problem of finding the tightest upper bound becomes a finite-dimensional optimization problem over the network's weights, $\theta$:
+$$\min_{\theta} \mathbb{E}\left[\max_{t=0,\dots,N} \left(\text{Payoff}_t - M_t(\theta)\right)\right]$$
+To solve this in practice, the theoretical **objective function** (the expectation) is connected to a practical **loss function** through Monte Carlo approximation. The true expectation over all possible paths is approximated by the sample mean over the $N$ simulated paths. This sample mean *is* the loss function that the solver seeks to minimize:
+
+$$\underbrace{\mathbb{E}\left[\max_{t} (\text{Payoff}_t - M_t(\theta))\right]}_{\text{Theoretical Objective}} \quad \xrightarrow{\text{approximated by}} \quad \underbrace{\frac{1}{N} \sum_{i=1}^{N} \max_{t} (\text{Payoff}_t^{(i)} - M_t^{(i)}(\theta))}_{\text{Practical Loss Function}}$$
+
+The algorithm then finds the minimum of this loss function using the following steps:
+
+1.  **Gradient Descent**: The solver uses a gradient-based optimizer, such as Adam, to find the optimal weights $\theta^*$ that minimize the loss function. In each step of the optimization, the gradient of the loss with respect to the network weights is computed via backpropagation and used to update the weights.
+2.  **Early Stopping**: Training is monitored, and if the loss fails to improve for a set number of epochs, the optimization is stopped early to prevent overfitting and save computation time.
+
+The final, minimized value of the loss function is the computed upper bound price, $V_{\text{upper}}$.
+
+### 4. Choice of Neural Network Architecture
+
+The solver employs a **Residual Network (ResNet)**, enhanced with **Squeeze-and-Excitation (SE)** blocks, to serve as the function approximator. This architecture is deliberately chosen to handle the complexity of the signature features and to ensure a stable and efficient training process.
+
+#### The ResNet Backbone: Learning Hierarchical Refinements
+A residual block computes its output, $x_{l+1}$, by adding its input, $x_l$, to a non-linear transformation, $F(x_l)$, of the input:
+$$x_{l+1} = F(x_l) + x_l$$
+This mathematical form is highly effective for signatures because the **skip connection** ($+ x_l$) acts as an "information highway." It allows the foundational information from the lower-order signature terms (e.g., overall displacement) to be perfectly preserved as it propagates to deeper layers. The network block, $F(x_l)$, is then free to focus only on learning the **refinement** or **perturbation** provided by the more complex, higher-order signature terms (e.g., area and curvature). This structure mirrors the natural hierarchy of the signature itself.
+
+#### The SE Block: Adaptive Feature Recalibration
+An SE block acts as an **attention mechanism** that allows the model to learn the dynamic, context-dependent importance of each feature in the signature vector. It performs this through a three-step mathematical process:
+
+1.  **Squeeze**: The block first aggregates the global information from the signature features to produce a summary descriptor. For a vector input, this captures the overall state of the features.
+2.  **Excite**: This descriptor is then passed through a small gating mechanism, which is a two-layer neural network with a final sigmoid activation, $\sigma$. This gate outputs a vector of importance scores, $s$, where each score is between 0 and 1. The mathematical form is:
+    $$s = \sigma(W_2 \delta(W_1 X))$$
+    where $W_1$ and $W_2$ are the learnable weights of the two layers and $\delta$ is a ReLU activation.
+3.  **Recalibrate**: The final output of the block is obtained by element-wise multiplying the original signature features, $x_c$, by their learned importance scores, $s_c$:
+    $$\tilde{x}_c = s_c \cdot x_c$$
+
+This process of recalibration is what makes the SE block so powerful for signatures. It allows the network to learn the complex, non-linear interdependencies between the different signature terms. For instance, it can learn that if a Level 2 "area" term is high (indicating a volatile path), then a Level 4 "oscillatory" term is highly predictive. In response, the network will learn to output a high score ($s_c \approx 1$) for that Level 4 term, effectively **paying more attention** to it, while suppressing less relevant terms.
+
+
+#### Architectural Advantage over a Simple MLP
+Even if a shallow, single-block MLP had the same number of parameters as a deep ResNet, the ResNet's architecture gives it a significant advantage.
+
+* **Shallow, Wide MLP**: This model attempts to learn the entire input-output relationship in **one single, massive transformation**. It has a higher tendency to simply memorize the training data (overfitting) rather than learning the hierarchical structure of the signature features.
+* **Deep ResNet**: This model learns the relationship as a **sequence of simple, iterative refinements**. The first layers learn basic patterns, which are then combined by deeper layers to form more complex patterns. This hierarchical learning process is more efficient and leads to better generalization for structured data like path signatures.
+
+This architectural difference also leads to a more **efficient learning process**. The skip connections in the ResNet create a smoother loss landscape, which allows the gradient-based optimizer to converge faster and more reliably. The SE blocks further enhance this efficiency by acting as a smart filter, directing the model's focus and gradient updates toward the most informative signature terms. This combination results in a model that not only generalizes better but also learns more quickly than a wide MLP, which often struggles with a more complex and difficult-to-navigate loss surface.
