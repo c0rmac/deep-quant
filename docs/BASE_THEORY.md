@@ -180,18 +180,25 @@ $$V_{\text{lower}} = \mathbb{E}\left[e^{-r\hat{\tau}} \text{Payoff}(S_{\hat{\tau
 ---
 ### The Dual Problem: Finding the Upper Bound
 
-The dual problem provides a powerful method for finding a provable upper bound on the option's price, based on a key result from martingale theory.
+The dual problem provides a powerful method for finding a provable upper bound on the option's price. The formulation is derived from the principle that subtracting a "fair game"—a martingale process that starts at zero—from the option's payoff does not change its true value, but allows for the construction of a clear upper bound. ⚖️
 
-#### Martingale Duality
-For any **martingale** process $M_t$ (with $M_0=0$) adapted to the filtration $\{\mathcal{F}_t\}$, the true option price $V_0$ is bounded from above:
+The true value of an American option, $`V_0`$, is the expected discounted payoff received by exercising at the optimal time, $`\tau^*`$. If we define the discounted payoff process as $`P_t = e^{-rt}\text{Payoff}(S_t)`$, then $`V_0 = \mathbb{E}[P_{\tau^*}]`$. Based on the **Optional Stopping Theorem**, we can subtract any suitable martingale $`M_t`$ (with $`M_0=0`$) without changing the expected value, which gives the identity $`V_0 = \mathbb{E}[P_{\tau^*} - M_{\tau^*}]`$.
 
-$$V_0 \le \mathbb{E}\left[\max_{t \in [0,T]} \left(e^{-rt}\text{Payoff}(S_t) - M_t\right)\right]$$
+The key insight comes from recognizing that for any single path, the value of the process $`(P_t - M_t)`$ at the specific exercise time $`\tau^*`$ can never be greater than the maximum value that process achieves over the option's entire lifetime. This simple fact, $`P_{\tau^*} - M_{\tau^*} \le \sup_{t \in [0,T]} (P_t - M_t)`$, must also hold when we take the expectation over all paths.
 
-Since this holds for any martingale, the tightest possible upper bound is found by searching over the space of all valid martingales ($\mathcal{M}$) to find the one that minimizes this expectation:
+Combining these steps leads directly to the **martingale duality formula**:
 
-$$V_{\text{upper}} = \inf_{M \in \mathcal{M}} \mathbb{E}\left[\max_{t \in [0,T]} \left(e^{-rt}\text{Payoff}(S_t) - M_t\right)\right]$$
+$$V_0 \le \mathbb{E}\left[\sup_{t \in [0,T]} \left(e^{-rt}\text{Payoff}(S_t) - M_t\right)\right]$$
 
-The theoretical challenge is to solve this minimization problem over an infinite-dimensional space. This is typically approached by parameterizing a rich class of martingales. A general way to construct a martingale is as a stochastic integral $M_t = \int_0^t \alpha_s dW_s$, where the integrand process $\alpha_s$ is adapted to the filtration. The problem then becomes finding the optimal process $\alpha$.
+Since this relationship holds for *any* valid martingale, the goal of the dual solver is to find the specific martingale that makes this upper bound as tight (as low) as possible. Therefore, the upper bound is the infimum over the space of all valid martingales ($`\mathcal{M}`$):
+
+$$V_{\text{upper}} = \inf_{M \in \mathcal{M}} \mathbb{E}\left[\sup_{t \in [0,T]} \left(e^{-rt}\text{Payoff}(S_t) - M_t\right)\right]$$
+
+To make this computationally feasible, the search is restricted to a rich family of martingales constructed as **stochastic integrals**. A general martingale process is defined as:
+
+$$M_t = \int_0^t \alpha_s dW_s$$
+
+where $\alpha_s$ is a predictable process known as the **martingale integrand**. The problem of finding the optimal martingale $M$ is thus transformed into the more concrete problem of finding the optimal integrand process $\alpha_s$.
 
 ---
 ### The Duality Gap
