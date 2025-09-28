@@ -157,7 +157,7 @@ $$\min_{\theta} \mathbb{E}\left[\max_{t=0,\dots,N} \left(\text{Payoff}_t - M_t(\
 
 To solve this in practice, the theoretical **objective function** (the expectation) is connected to a practical **loss function** through Monte Carlo approximation. The true expectation over all possible paths is approximated by the sample mean over the $N$ simulated paths. This sample mean *is* the loss function that the solver seeks to minimize:
 
-$$\underbrace{\mathbb{E}\left[\max_{t} (\text{Payoff}_t - M_t(\theta))\right]}_{\text{Theoretical Objective}} \quad \xrightarrow{\text{approximated by}} \quad \underbrace{\frac{1}{N} \sum_{i=1}^{N} \max_{t} (\text{Payoff}_t^{(i)} - M_t^{(i)}(\theta))}_{\text{Practical Loss Function}}$$
+$$\underbrace{\mathbb{E}\left[\max_{t} (\text{Payoff}_t - M_t(\theta))\right]}_{\text{Theoretical Objective}} \quad \xrightarrow \quad \underbrace{\frac{1}{N} \sum_{i=1}^{N} \max_{t} (\text{Payoff}_t^{(i)} - M_t^{(i)}(\theta))}_{\text{Practical Loss Function}}$$
 
 The algorithm then finds the minimum of this loss function using the following steps:
 
