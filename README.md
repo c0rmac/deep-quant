@@ -12,7 +12,7 @@ For a deeper dive into the methodologies and advanced usage of the library, plea
 
 * [**`Base Theory: SDEs and Path Signatures`**](./docs/BASE_THEORY.md)**:** The technical details motivating much of the library's foundations.
 
-* [**`Neural Network Solvers`**](https://www.google.com/search?q=NN_THEORY.md)**:** The technical details driving the implementation of the neural network and kernel solvers.
+* [**`Neural Network Solvers`**](./docs/NN_THEORY.md)**:** The technical details driving the implementation of the neural network and kernel solvers.
 
 * [**`Advanced Usage and Examples`**](https://www.google.com/search?q=ADVANCED_EXAMPLES.md)**:** Details other advanced usages of the library beyond what the `ElementaryPricingWorkflow` provides.
 
