@@ -138,7 +138,13 @@ $$\alpha_s \approx NN_{\theta}\left(\text{sig}(\text{Path})_s\right)$$
 
 #### The Parameterized Martingale
 By substituting this neural network approximation into the stochastic integral, we obtain the final, parameterized form of the martingale used by the solver. Its behavior is now controlled entirely by the learnable weights, $\theta$, of the neural network:
-$$M_t(\theta) = \int_0^t NN_{\theta}\left(\text{sig}(\text{Path})_s\right) \, dW_s$$In the discrete-time setting of the algorithm, this integral is approximated as a sum of increments over the time steps of the simulation:$$M_t(\theta) = \sum_{j=0}^{t-1} NN_{\theta}(\text{sig}(\text{Path})_j) \cdot \Delta W_{j+1}$$
+
+$$M_t(\theta) = \int_0^t NN_{\theta}\left(\text{sig}(\text{Path})_s\right) \, dW_s$$
+
+In the discrete-time setting of the algorithm, this integral is approximated as a sum of increments over the time steps of the simulation:
+
+$$M_t(\theta) = \sum_{j=0}^{t-1} NN_{\theta}(\text{sig}(\text{Path})_j) \cdot \Delta W_{j+1}$$
+
 where $\Delta W_{j+1}$ is the Brownian increment over the interval $[t_j, t_{j+1}]$.
 
 This reformulation successfully transforms the abstract problem of finding an optimal process $\alpha_s$ into a concrete, finite-dimensional optimization problem: finding the optimal network weights $\theta$.
@@ -146,7 +152,9 @@ This reformulation successfully transforms the abstract problem of finding an op
 ### 3. The Algorithm: Gradient-Based Optimization
 
 With the martingale parameterized by the neural network, the problem of finding the tightest upper bound becomes a finite-dimensional optimization problem over the network's weights, $\theta$:
+
 $$\min_{\theta} \mathbb{E}\left[\max_{t=0,\dots,N} \left(\text{Payoff}_t - M_t(\theta)\right)\right]$$
+
 To solve this in practice, the theoretical **objective function** (the expectation) is connected to a practical **loss function** through Monte Carlo approximation. The true expectation over all possible paths is approximated by the sample mean over the $N$ simulated paths. This sample mean *is* the loss function that the solver seeks to minimize:
 
 $$\underbrace{\mathbb{E}\left[\max_{t} (\text{Payoff}_t - M_t(\theta))\right]}_{\text{Theoretical Objective}} \quad \xrightarrow{\text{approximated by}} \quad \underbrace{\frac{1}{N} \sum_{i=1}^{N} \max_{t} (\text{Payoff}_t^{(i)} - M_t^{(i)}(\theta))}_{\text{Practical Loss Function}}$$
@@ -164,7 +172,9 @@ The solver employs a **Residual Network (ResNet)**, enhanced with **Squeeze-and-
 
 #### The ResNet Backbone: Learning Hierarchical Refinements
 A residual block computes its output, $x_{l+1}$, by adding its input, $x_l$, to a non-linear transformation, $F(x_l)$, of the input:
+
 $$x_{l+1} = F(x_l) + x_l$$
+
 This mathematical form is highly effective for signatures because the **skip connection** ($+ x_l$) acts as an "information highway." It allows the foundational information from the lower-order signature terms (e.g., overall displacement) to be perfectly preserved as it propagates to deeper layers. The network block, $F(x_l)$, is then free to focus only on learning the **refinement** or **perturbation** provided by the more complex, higher-order signature terms (e.g., area and curvature). This structure mirrors the natural hierarchy of the signature itself.
 
 #### The SE Block: Adaptive Feature Recalibration
@@ -172,9 +182,11 @@ An SE block acts as an **attention mechanism** that allows the model to learn th
 
 1.  **Squeeze**: The block first aggregates the global information from the signature features to produce a summary descriptor. For a vector input, this captures the overall state of the features.
 2.  **Excite**: This descriptor is then passed through a small gating mechanism, which is a two-layer neural network with a final sigmoid activation, $\sigma$. This gate outputs a vector of importance scores, $s$, where each score is between 0 and 1. The mathematical form is:
+
     $$s = \sigma(W_2 \delta(W_1 X))$$
+    
     where $W_1$ and $W_2$ are the learnable weights of the two layers and $\delta$ is a ReLU activation.
-3.  **Recalibrate**: The final output of the block is obtained by element-wise multiplying the original signature features, $x_c$, by their learned importance scores, $s_c$:
+4.  **Recalibrate**: The final output of the block is obtained by element-wise multiplying the original signature features, $x_c$, by their learned importance scores, $s_c$:
     $$\tilde{x}_c = s_c \cdot x_c$$
 
 This process of recalibration is what makes the SE block so powerful for signatures. It allows the network to learn the complex, non-linear interdependencies between the different signature terms. For instance, it can learn that if a Level 2 "area" term is high (indicating a volatile path), then a Level 4 "oscillatory" term is highly predictive. In response, the network will learn to output a high score ($s_c \approx 1$) for that Level 4 term, effectively **paying more attention** to it, while suppressing less relevant terms.
