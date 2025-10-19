@@ -2,6 +2,9 @@ import torch
 from sklearn.linear_model import LinearRegression
 from typing import Callable
 
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
 from .base_solver import AbstractPrimalSolver, AbstractDualSolver, BaseLSPrimalSolver, BaseDLSolver
 
 class LinearPrimalSolver(BaseLSPrimalSolver):
@@ -15,7 +18,7 @@ class LinearPrimalSolver(BaseLSPrimalSolver):
     This corresponds to finding the coefficients $\beta_k$ in the base class
     documentation using Ordinary Least Squares.
     """
-    def _create_regressor(self) -> LinearRegression:
+    def _create_regressor(self) -> make_pipeline:
         """
         Provides the scikit-learn LinearRegression model.
 
@@ -25,7 +28,9 @@ class LinearPrimalSolver(BaseLSPrimalSolver):
         Returns:
             An instance of `sklearn.linear_model.LinearRegression`.
         """
-        return LinearRegression()
+        scaler = StandardScaler()
+        lin_regression = LinearRegression()
+        return make_pipeline(scaler, lin_regression)
 
 
 class LinearDualSolver(BaseDLSolver):

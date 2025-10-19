@@ -31,12 +31,11 @@ class KernelRFFPrimalSolver(BaseLSPrimalSolver):
     strategy and a tighter (higher) lower bound, helping to shrink the duality gap.
     """
 
-    def __init__(self, truncation_level: int, risk_free_rate: float, n_rff: int, gamma: str = 'scale'):
+    def __init__(self, risk_free_rate: float, n_rff: int, gamma: str = 'scale'):
         """
         Initializes the KernelRFFPrimalSolver.
 
         Args:
-            truncation_level (int): The signature truncation level.
             risk_free_rate (float): The risk-free interest rate (r).
             n_rff (int): The number of Random Fourier Features to use. This is the
                          dimensionality of the randomized feature space. Higher values
@@ -46,7 +45,7 @@ class KernelRFFPrimalSolver(BaseLSPrimalSolver):
                                   heuristic that sets gamma to 1 / (n_features * Var(X)).
         """
         # Initialize the base class with shared parameters
-        super().__init__(truncation_level, risk_free_rate)
+        super().__init__(risk_free_rate)
         self.n_rff = n_rff
         self.gamma = gamma
 
@@ -63,8 +62,9 @@ class KernelRFFPrimalSolver(BaseLSPrimalSolver):
             A scikit-learn pipeline instance that acts as a single regressor.
         """
         scaler = StandardScaler()
-        rff_sampler = RBFSampler(n_components=self.n_rff, gamma=self.gamma, random_state=42)
-        ridge_regressor = Ridge(alpha=1.0) # alpha is the L2 regularization strength
+        rff_sampler = RBFSampler(n_components=self.n_rff, gamma=self.gamma)
+        base_alpha = 2
+        ridge_regressor = Ridge(alpha=base_alpha) # alpha is the L2 regularization strength
         return make_pipeline(scaler, rff_sampler, ridge_regressor)
 
 

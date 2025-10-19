@@ -3,8 +3,8 @@ from pathlib import Path
 import yfinance as yf
 import pandas as pd
 
-from src.deepquant.data.loader import YFinanceLoader
-from src.deepquant.workflows.elemtary_pricing_workflow import ElementaryPricingWorkflow
+from deepquant.data.loader import YFinanceLoader
+from deepquant.workflows.elemtary_pricing_workflow import ElementaryPricingWorkflow
 
 # --- 1. Setup ---
 asset_ticker = 'AAPL'
@@ -29,7 +29,17 @@ workflow = ElementaryPricingWorkflow(
 price_info, engine_results = workflow.price_option(
     strike=strike_price,
     maturity=252, # 1 year in trading days
-    option_type='put'
+    option_type='put',
+
+    # Defines within what monetary range the primal's price must be.
+    primal_uncertainty=0.05
+    # Since the primal must be computed on a stochastic process,
+    # there is uncertainty on each primal computation. The process
+    # will generate paths and run the primal until the mean is within
+    # a 95% confidence interval of width 2 * primal_uncertainty.
+    #
+    # For example, if the deduced option price is $2.05, and primal-uncertainty is $0.05,
+    # the process will stop once the deduced price's 95%-confidence interval has shrunk to ($2, $2.10).
 )
 
 # --- 3. Display Results ---

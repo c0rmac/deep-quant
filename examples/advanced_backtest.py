@@ -2,11 +2,11 @@ import yfinance as yf
 import pandas as pd
 from pathlib import Path
 
-from src.deepquant.data.loader import YFinanceLoader
-from src.deepquant.workflows.elemtary_pricing_workflow import ElementaryPricingWorkflow
+from deepquant.data.loader import YFinanceLoader
+from deepquant.workflows.elemtary_pricing_workflow import ElementaryPricingWorkflow
 
 # --- 1. Setup ---
-asset_ticker = '^GSPC'
+asset_ticker = 'SPY'
 evaluation_date = '2023-01-03'
 maturity_date = '2024-01-03'
 
@@ -25,18 +25,10 @@ workflow = ElementaryPricingWorkflow(
     data_loader=data_loader,
     models_dir=Path.cwd() / "models",
     risk_free_rate=0.05,
-
-    primal_learning_scale=8, # Scale up the learning ability of the primal.
-    # Higher scale results in a tighter bound, but require more computational resources and
-    # may be prone to overfitting if the num_paths and num_steps are not sufficiently large enough.
-    dual_learning_depth=2, # Deepen the learning ability of the dual.
-    # Greater depth results in a tighter bound, but requires more random access memory and
-    # computational resources. Setting the depth too high without sufficient paths or steps
-    # may result in wasted resources.
+    retrain_hurst_interval_days=30,
 
     force_model='bergomi', # Override the forecast and force the rough model
-    bergomi_static_params = { 'H': 0.1, "eta": 1.9, "rho": -0.9 } # Override the bergomi
-    # simulation parameters.
+    # bergomi_static_params = { 'H': 0.4, "eta": 1.9, "rho": -0.9 } # Override the bergomi simulation parameters.
 )
 
 # Run the pricing process with custom, high-fidelity simulation parameters.
@@ -44,15 +36,18 @@ price_info, engine_results = workflow.price_option(
     strike=strike_price,
     maturity=maturity_date,
     option_type='put',
+    primal_uncertainty=0.8,
 
     exchange='NYSE',        # <-- Specify the exchange for which the asset is traded.
+    evaluation_date=evaluation_date,
 
-    num_paths=25_000,       # <-- Specify the number of volatility paths to compute.
-    num_steps=70,           # <-- Specify the number of steps each volatility path should take.
-    # Warning: Scaling num_steps beyond 100 and num_paths beyond 30_000 is
-    # random access memory-resource intensive even if dual_learning_depth=1
+    max_num_paths=300,       # <-- Specify the number of volatility paths to compute.
+    max_num_steps=5000,      # <-- Specify the number of steps each volatility path should take.
+    # Reduce these paramters in order to reduce resource usage.
 
-    evaluation_date=evaluation_date
+    # Note: Smaller values may mean that the primal process will have to run for longer in order to
+    # obtain a sufficiently small primal uncertainty on the confidence interval. It may also
+    # induce significant bias (ie: miss-pricing the deduced price). Use with caution
 )
 
 # --- 3. Display Results ---

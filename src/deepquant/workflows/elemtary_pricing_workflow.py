@@ -1,3 +1,5 @@
+import math
+from enum import Enum
 from pathlib import Path
 
 import yfinance as yf
@@ -13,10 +15,78 @@ from .primal_dual_engine import PricingEngine
 from .price_deducer import PriceDeducer
 from ..calibration.hurst_forecaster import HurstForecaster
 from ..calibration.heston_calibrator import HestonCalibrator
-from ..solvers.deep_signature_solver import DeepSignaturePrimalSolver, DeepSignatureDualSolver
+from ..solvers.deep_signature_solver import DeepSignaturePrimalSolver, DeepSignatureDualSolver, \
+    estimate_dual_solver_memory
 from ..data.base_loader import AbstractDataLoader
+from ..solvers.hilbert_operator_solver import HilbertOperatorPrimalSolver
 from ..solvers.kernel_rff_solver import KernelRFFPrimalSolver
+from ..solvers.linear_solver import LinearPrimalSolver
 
+def _get_signature_dimension(truncation_level: int, path_dimension: int) -> int:
+    """
+    Helper function to calculate the dimension of a truncated signature for a
+    path of a given dimension.
+    """
+    # For a 1D path, the signature dimension is simply the truncation level.
+    if path_dimension == 1:
+        return truncation_level
+
+    # For d > 1, the dimension is the sum of a geometric series.
+    # Formula: (d^(M+1) - 1) / (d - 1)
+    dimension = (path_dimension ** (truncation_level + 1) - 1) // (path_dimension - 1)
+    return dimension
+
+
+def get_hidden_dim_heuristic(truncation_level: int, path_dimension: int = 2) -> int:
+    """
+    Calculates a heuristic for the hidden layer dimension based on the
+    signature TRUNCATION LEVEL.
+
+    It first computes the signature's dimension and then chooses the nearest
+    power of two as the recommended hidden dimension.
+
+    Args:
+        truncation_level (int): The truncation level of the signature.
+        path_dimension (int, optional): The dimension of the path being analyzed.
+                                       Defaults to 2 (e.g., time + 1D asset price).
+
+    Returns:
+        int: The recommended hidden dimension for the neural network.
+    """
+    if truncation_level < 1:
+        raise ValueError("Truncation level must be 1 or greater.")
+
+    # 1. Calculate the signature dimension from the truncation level.
+    signature_dimension = _get_signature_dimension(truncation_level, path_dimension)
+
+    # 2. Apply the power-of-two heuristic to the calculated dimension.
+    log_dim = math.log2(signature_dimension)
+    rounded_log_dim = round(log_dim)
+    hidden_dim = int(math.pow(2, rounded_log_dim))
+
+    return hidden_dim
+
+def get_num_layers_heuristic(truncation_level: int) -> int:
+    """
+    Calculates a heuristic for the number of ResNet blocks based on the
+    signature truncation level.
+
+    The heuristic is (Truncation Level - 1), with a minimum of 1 block.
+    This scales the model's depth with the complexity of the signature.
+
+    Args:
+        truncation_level (int): The truncation level of the signature.
+
+    Returns:
+        int: The recommended number of ResNet blocks.
+    """
+    if truncation_level < 1:
+        raise ValueError("Truncation level must be 1 or greater.")
+
+    # The number of layers is the truncation level minus one, but at least 1.
+    num_layers = (max(1, truncation_level - 1) / 2).__ceil__()
+
+    return num_layers
 
 class ElementaryPricingWorkflow:
     """
@@ -40,12 +110,10 @@ class ElementaryPricingWorkflow:
             data_loader: AbstractDataLoader,
             models_dir: Path,
             risk_free_rate: float,
-            primal_learning_scale: int=1,
-            dual_learning_depth: int=1,
             retrain_hurst_interval_days: int = 30,
             force_model: Optional[str] = None,
-            bergomi_static_params: dict = { 'H': 0.1, "eta": 1.9, "rho": -0.9 },
-            heston_static_params: dict = { "rho": -0.7 },
+            bergomi_static_params: dict = { 'H': 0.49, "eta": 1.9, "rho": -0.7 },
+            heston_static_params: dict = { 'H': 0.5, "rho": -0.7 },
     ):
         """
         Initializes the HybridPricingWorkflow.
@@ -70,18 +138,28 @@ class ElementaryPricingWorkflow:
         self.bergomi_static_params = bergomi_static_params
         self.heston_static_params = heston_static_params
 
+        dual_truncation_level = 3
+        self.dual_truncation_level = dual_truncation_level
+
+        # resnet_depth = min(get_num_layers_heuristic(dual_truncation_level), dual_max_learning_depth)
+        resnet_depth = 2
+        self.resnet_depth = resnet_depth
+
+        # hidden_dim = get_hidden_dim_heuristic(dual_truncation_level)
+        hidden_dim = 64
+        self.hidden_dim = hidden_dim
+
         # For the final, effective library, we use our most powerful solver.
         # The hyperparameters are set to robust, well-tuned values.
-        self.primal_solver = KernelRFFPrimalSolver(truncation_level=6, risk_free_rate=self.r, n_rff=64 * primal_learning_scale, gamma='scale')
-        # self.primal_solver = LinearPrimalSolver(truncation_level=5, risk_free_rate=self.r)
+        self.primal_solver = HilbertOperatorPrimalSolver(risk_free_rate=self.r)
         self.dual_solver = DeepSignatureDualSolver(
-            truncation_level=6,
-            hidden_dim=64,
+            hidden_dim=hidden_dim,
             learning_rate=0.009,
-            max_epochs=2000,
-            patience=20,
-            tolerance=1e-6,
-            num_res_net_blocks=dual_learning_depth
+            max_epochs=800,
+            patience=50,
+            tolerance=1e-3,
+            num_res_net_blocks=resnet_depth,
+            batch_size=128
         )
 
     def price_option(
@@ -89,10 +167,11 @@ class ElementaryPricingWorkflow:
             strike: float,
             maturity: Union[int, float, str, date],
             option_type: str,
+            primal_uncertainty: float,
             exchange: str = 'NYSE',
-            num_paths: int = 20_000,
-            num_steps: int = 50,
             evaluation_date: Union[str, date] = None,
+            max_num_paths: int = 100_000,
+            max_num_steps: int = 100_000
     ):
         """
         Executes the full, adaptive pricing workflow.
@@ -103,11 +182,27 @@ class ElementaryPricingWorkflow:
                 Can be an integer/float (number of trading days) or a specific
                 date (as a 'YYYY-MM-DD' string or a datetime.date object).
             option_type (str): The type of option ('put' or 'call').
+            primal_uncertainty (float): Defines within what monetary range the primal's price must be.
+
+                Since the primal must be computed on a stochastic process,
+                there is uncertainty on each primal computation. The process
+                will generate paths and run the primal until the mean is within
+                a 95% confidence interval of width 2 * primal_uncertainty.
+
+                For example, if the deduced option price is $2.05, and primal-uncertainty is $0.05,
+                the process will stop once the deduced price's 95%-confidence interval has shrunk to ($2, $2.10).
             exchange (str): The stock exchange calendar to use for counting
                             trading days (e.g., 'NYSE'). Defaults to 'NYSE'.
-            num_paths (int): The number of Monte Carlo paths to simulate.
-            num_steps (int): The number of time steps for the simulation.
             evaluation_date (Union[str, date], optional): The date for the valuation. Defaults to today.
+            max_num_paths (int, optional): The maximum number of paths the simulation is allowed to generate.
+                Reduce this in order to reduce resource usage.
+                Note: Smaller values may mean that the primal process will have to run for longer in order to
+                obtain a sufficiently small primal uncertainty on the confidence interval. It may also
+                induce significant bias (ie: miss-pricing the deduced price). Use with caution
+            max_num_steps (int, optional): The maximum number of steps the simulation is allowed to generate.
+                Reduce this in order to reduce resource usage.
+                Note: Smaller values may mean that the deduced primal will be significantly biased
+                (ie: miss-pricing the deduced price). Use with caution.
 
         Returns:
             A tuple containing the deduced price dictionary and the full engine results.
@@ -195,10 +290,17 @@ class ElementaryPricingWorkflow:
 
         # Set the final model parameters based on the decision
         if use_bergomi:
-            model_params['H'] = self.bergomi_static_params['H']
+            if 'H' not in model_params or self.force_model == 'bergomi':
+                # model_params['H'] = self.bergomi_static_params['H']
+                model_params.update(self.bergomi_static_params)
+            else:
+                model_params['eta'] = self.bergomi_static_params['eta']
+                model_params['rho'] = self.bergomi_static_params['rho']
             print(f"-> Regime: ROUGH market (H={model_params['H']:.3f}). Selecting Bergomi model.")
-            model_params.update(self.bergomi_static_params)
         else:
+            if self.force_model == 'heston':
+                # model_params['H'] = self.bergomi_static_params['H']
+                model_params.update(self.heston_static_params)
             print(f"-> Regime: SMOOTH market (H={model_params['H']:.3f}). Selecting Heston model.")
             model_params['H'] = 0.5 # Ensure H is exactly 0.5 for Heston
 
@@ -207,14 +309,23 @@ class ElementaryPricingWorkflow:
         # --- Step 4: Run Pricing Engine ---
         # With the model and parameters set, we pass everything to the core
         # primal-dual engine to perform the heavy lifting of the simulation and pricing.
+
         engine = PricingEngine(
             sde_model=sde_model,
             primal_solver=self.primal_solver,
             dual_solver=self.dual_solver,
             option_type=option_type,
-            strike=strike
+            strike=strike,
+            r=self.r
         )
-        engine_results = engine.run(num_paths=num_paths, num_steps=num_steps, T=maturity_in_years)
+
+        # num_steps = int(1200 * maturity_in_years)
+        engine_results = engine.run(
+            T=maturity_in_years,
+            primal_uncertainty=primal_uncertainty,
+            max_num_paths=max_num_paths,
+            max_num_steps=max_num_steps
+        )
 
         # --- Step 5: Deduce the Final Price ---
         # We take the raw bounds from the engine and calculate a single, actionable
