@@ -21,12 +21,17 @@ where $W_t^H$ is a fractional Brownian motion. A naive, vectorized implementatio
 The definitive solution was to implement a stable hybrid simulation scheme that is both mathematically sound and numerically robust. This approach completely abolishes the need for artificial clamps. The method consists of two key components:
 
 1.  **Vectorized Log-Variance Path:** The variance process is handled by first simulating its logarithm, which is a numerically well-behaved process:
+
     $$\log(V_t) = \log(v_0) + \eta W_t^H - \frac{1}{2}\eta^2 t^{2H}$$
+    
     The full path of $\log(V_t)$ is calculated in a single, vectorized operation. The final variance path is then obtained by exponentiating, $V_t = \exp(\log(V_t))$, which mathematically guarantees its positivity.
 
 2.  **Iterative Log-Euler for Stock Price:** With a stable, positive variance path now available, the stock price path, which follows the SDE:
+
     $$\frac{dS_t}{S_t} = r dt + \sqrt{V_t} dB_t$$
+    
     is simulated using a step-by-step `for` loop. The iterative Log-Euler scheme discretizes the logarithm of the stock price, which is more stable than a direct discretization of $S_t$:
+    
     $$\log(S_{t+1}) = \log(S_t) + \left(r - \frac{1}{2}V_t\right)dt + \sqrt{V_t} \Delta B_t$$
 
 This hybrid approach combines the speed of vectorization where it is safe (for the variance process) with the stability of an iterative loop where it is necessary (for the price process), ensuring the generation of robust and accurate paths.
@@ -69,7 +74,11 @@ The workflow is as follows:
 
 2.  **Price Each Simulation**: For each of the `N` sets of paths, we run the full `PricingEngine` once. This involves executing the **`LinearPrimalSolver`** and the `DeepSignatureDualSolver` to obtain a single, high-quality estimate for the `lower_bound` and `upper_bound` for that specific run.
 
-3.  **Create a Distribution**: At the end of this process, we have `N` distinct price intervals. For each run `i`, we calculate a midpoint price, $M_i = (\text{lower\_bound}_i + \text{upper\_bound}_i) / 2$. This gives us a final distribution of high-quality midpoint estimates, as well as distributions for the lower and upper bounds.
+3.  **Create a Distribution**: At the end of this process, we have `N` distinct price intervals. For each run `i`, we calculate a midpoint price, 
+
+$$M_i = (\text{lower bound}_i + \text{upper bound}_i) / 2$$
+
+This gives us a final distribution of high-quality midpoint estimates, as well as distributions for the lower and upper bounds.
 
 
 
