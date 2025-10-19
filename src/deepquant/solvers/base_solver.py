@@ -1,17 +1,49 @@
+import time
 from abc import ABC, abstractmethod
 
 import numpy
 import torch
-from typing import Dict, Callable
+from typing import Dict, Callable, Optional, Tuple
 from sklearn.base import RegressorMixin
 
 
 # AbstractPrimalSolver and AbstractDualSolver remain the same...
 class AbstractPrimalSolver(ABC):
     @abstractmethod
-    def solve(self, paths: torch.Tensor, payoff_fn: Callable, **kwargs) -> float:
+    def solve(self, precomputed_vars: dict, option_type: str, strike_price: float, payoff_fn: Callable, **kwargs) -> float:
         pass
 
+
+def count_in_money_paths(
+        asset_prices_at_t: torch.Tensor,
+        strike_price: float,
+        option_type: str = 'put'
+) -> int:
+    """
+    Calculates the number of in-the-money paths at a specific time step.
+
+    Args:
+        asset_prices_at_t (torch.Tensor): A 1D tensor of asset prices for all paths at a single time t.
+        strike_price (float): The strike price of the option.
+        option_type (str): The type of the option, either 'put' or 'call'.
+
+    Returns:
+        int: The number of paths that are in-the-money.
+    """
+    if option_type == 'put':
+        intrinsic_values = torch.clamp(strike_price - asset_prices_at_t, min=0)
+    elif option_type == 'call':
+        intrinsic_values = torch.clamp(asset_prices_at_t - strike_price, min=0)
+    else:
+        raise ValueError("option_type must be 'put' or 'call'")
+
+    # Create a boolean mask where intrinsic value > 0
+    in_money_mask = intrinsic_values > 0
+
+    # Sum the boolean mask to count the number of 'True' values
+    num_in_money = torch.sum(in_money_mask)
+
+    return num_in_money.item()
 
 class BaseLSPrimalSolver(AbstractPrimalSolver):
     r"""
@@ -44,15 +76,13 @@ class BaseLSPrimalSolver(AbstractPrimalSolver):
     coefficients $\beta_k$.
     """
 
-    def __init__(self, truncation_level: int, risk_free_rate: float):
+    def __init__(self, risk_free_rate: float):
         """
         Initializes the base Longstaff-Schwartz solver.
 
         Args:
-            truncation_level (int): The level to which path signatures are truncated.
             risk_free_rate (float): The risk-free interest rate for discounting.
         """
-        self.truncation_level = truncation_level
         self.r = risk_free_rate
 
     @abstractmethod
@@ -68,7 +98,7 @@ class BaseLSPrimalSolver(AbstractPrimalSolver):
         """
         pass
 
-    def solve(self, paths: torch.Tensor, payoff_fn: Callable, **kwargs) -> float:
+    def solve(self, precomputed_vars: dict, option_type: str, strike_price: float, payoff_fn: Callable, **kwargs) -> float:
         """
         Executes the signature-based Longstaff-Schwartz algorithm.
 
@@ -80,58 +110,58 @@ class BaseLSPrimalSolver(AbstractPrimalSolver):
         Returns:
             The calculated lower bound price of the American option.
         """
-        # --- Initialization ---
-        num_steps = paths.shape[1]
-        T = kwargs.get('T')
-        if T is None: raise ValueError("Maturity 'T' must be provided.")
-        device = paths.device
+        # --- 1. Unpack precomputed variables ---
+        paths = precomputed_vars["paths"]
+        payoffs = precomputed_vars["payoffs"]
+        signatures = precomputed_vars["signatures"]
+        dt = precomputed_vars["dt"]
 
-        dt = numpy.float32(T / (num_steps - 1))
+        device, num_steps = paths.device, paths.shape[1]
         discount_factor = torch.exp(torch.tensor(-self.r * dt, device=device))
-        asset_paths = paths[:, :, 0]
-        option_values = payoff_fn(asset_paths[:, -1])
 
-        # --- Backward Induction Loop ---
+        # --- 2. Initialization ---
+        # Get initial option values from the precomputed payoff matrix
+        option_values = payoffs[:, -1]
+
+        i = 0
+        # --- 3. Backward Induction Loop ---
+        # The loop is now much cleaner
         for t in range(num_steps - 2, -1, -1):
-            intrinsic_value = payoff_fn(asset_paths[:, t])
+            intrinsic_value = payoffs[:, t]  # Use precomputed payoff
             in_the_money_mask = intrinsic_value > 0
             if not torch.any(in_the_money_mask):
-                option_values = option_values * discount_factor
-                option_values = torch.maximum(intrinsic_value, option_values)
+                option_values *= discount_factor
                 continue
 
-            # Use path history up to time t as features, preventing lookahead bias.
-            paths_slice = paths[:, :t + 1, :]
-            from ..features.signature_calculator import calculate_signatures  # Avoid circular import
-            signatures = calculate_signatures(paths_slice, self.truncation_level)
+            # Get the precomputed signatures for this time step
+            signatures_t = signatures[:, t, :]
 
             final_mask = in_the_money_mask.squeeze()
             if final_mask.dim() > 1:
                 final_mask = final_mask[:, 0]
 
-            filtered_signatures = signatures[final_mask]
-            Y = option_values[final_mask] * discount_factor
+            training_signatures = signatures_t[final_mask]
+            training_Y = option_values[final_mask] * discount_factor
 
-            # Get the specific regressor from the subclass and fit it.
             regressor = self._create_regressor()
-            regressor.fit(filtered_signatures.cpu().numpy(), Y.cpu().numpy())
-            continuation_value = torch.from_numpy(regressor.predict(signatures.cpu().numpy())).to(device)
+            regressor.fit(training_signatures.cpu().numpy(), training_Y.cpu().numpy())
 
-            # Apply the optimal exercise rule.
+            continuation_value = torch.from_numpy(regressor.predict(signatures_t.cpu().numpy())).to(device)
+
             option_values = torch.where(
                 (intrinsic_value > continuation_value) & in_the_money_mask,
                 intrinsic_value,
                 option_values * discount_factor
             )
 
-        # Final price is the average of values at t=0.
+            i += 1
+
         final_price = torch.mean(option_values)
         return final_price.item()
 
-
 class AbstractDualSolver(ABC):
     @abstractmethod
-    def solve(self, paths: torch.Tensor, dW: torch.Tensor, payoff_fn, **kwargs) -> float:
+    def solve(self, precomputed_vars: dict, payoff_fn, **kwargs) -> float:
         pass
 
 
@@ -212,7 +242,7 @@ class BaseDLSolver(AbstractDualSolver):
         """
         device = paths.device
         num_steps, num_paths = paths.shape[1], paths.shape[0]
-        from ..signature_calculator import calculate_signatures  # Avoid circular import
+        from ..features.signature_calculator import calculate_signatures  # Avoid circular import
 
         # **REFACTOR**: We need to compute features at each time step inside the loop.
         # First, get the dimension of the final features.

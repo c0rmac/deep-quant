@@ -14,11 +14,81 @@ For a deeper dive into the methodologies and advanced usage of the library, plea
 
 * [**`Neural Network Solvers`**](./docs/NN_THEORY.md)**:** The technical details driving the implementation of the neural network and kernel solvers.
 
+* [**`Challenges & Enhancements`**](./docs/NN_THEORY.md)**:** The technical details describing how challenges were uncovered and how enhancements were made to solve them.
+
 * [**`Advanced Usage and Examples`**](https://www.google.com/search?q=ADVANCED_EXAMPLES.md)**:** Details other advanced usages of the library beyond what the `ElementaryPricingWorkflow` provides.
 
 ## Installation ⚙️
 
 ### For Users
+
+**⚠️ Important: PyTorch Dependency**
+
+This package depends on PyTorch. Due to the way PyTorch is built for different hardware (NVIDIA GPUs, Apple Silicon, etc.), you **must install PyTorch manually before installing `deepquant`**.
+
+If you try to install `deepquant` directly, `pip` may install a version of PyTorch that is incompatible with your system or with `deepquant`'s other dependencies, which can cause low-level crashes (like a `SIGSEGV` error).
+
+Please follow the guide for your preferred package manager.
+
+---
+
+#### Option 1: Mamba / Conda (Recommended)
+
+This is the safest and most reliable method. It ensures all your packages (PyTorch, NumPy, etc.) are 100% binary-compatible.
+
+1.  **Create a new, strict environment.**
+    This command creates a new environment, sets `conda-forge` as the *only* source, and installs Python.
+    ```bash
+    mamba create -n deepquant-env -c conda-forge --strict-channel-priority python=3.10
+    ```
+
+2.  **Activate the environment.**
+    ```bash
+    mamba activate deepquant-env
+    ```
+
+3.  **Install PyTorch**
+    Install all your complex binary packages from `conda-forge` first.
+    ```bash
+    mamba install pytorch -c pytorch
+    ```
+
+4.  **Install `deepquant` (forcing a source build).**
+    This final step uses `pip` to install our package, but the `--no-binary :all:` flag forces it to compile against the PyTorch you just installed, guaranteeing compatibility.
+    ```bash
+    pip install deep-quant-lib
+    ```
+
+---
+
+#### Option 2: `pip` and `venv`
+
+This method works, but you must be careful to install the correct PyTorch build.
+
+1.  **Create and activate a virtual environment.**
+    ```bash
+    python -m venv venv
+    source venv/bin/activate  # On macOS/Linux
+    .\venv\Scripts\activate   # On Windows
+    ```
+
+2.  **Install PyTorch FIRST.**
+    Go to the **[Official PyTorch Website](https://pytorch.org/get-started/locally/)** and select the correct command for your system (macOS, Linux, Windows) and hardware (CPU, NVIDIA CUDA, Apple MPS).
+
+    *For example, for a Mac with an M2 chip, you would run:*
+    ```bash
+    pip install torch
+    ```
+    *For a Linux machine with CUDA 12.1, you would run:*
+    ```bash
+    pip install torch --index-url [https://download.pytorch.org/whl/cu121](https://download.pytorch.org/whl/cu121)
+    ```
+
+3.  **Install `deepquant`.**
+    Once PyTorch is successfully installed, you can safely install `deepquant`.
+    ```bash
+    pip install deep-quant-lib
+    ```
 
 DeepQuant is available on PyPI and can be installed with pip:
 
@@ -77,7 +147,17 @@ workflow = ElementaryPricingWorkflow(
 price_info, engine_results = workflow.price_option(
     strike=strike_price,
     maturity=252, # 1 year in trading days
-    option_type='put'
+    option_type='put',
+    
+    # Defines within what monetary range the primal's price must be.
+    primal_uncertainty=0.05 
+    # Since the primal must be computed on a stochastic process,
+    # there is uncertainty on each primal computation. The process
+    # will generate paths and run the primal until the mean is within
+    # a 95% confidence interval of width 2 * primal_uncertainty.
+    # 
+    # For example, if the deduced option price is $2.05, and primal-uncertainty is $0.05,
+    # the process will stop once the deduced price's 95%-confidence interval has shrunk to ($2, $2.10).
 )
 
 # --- 3. Display Results ---
@@ -99,7 +179,7 @@ from deepquant.data.loader import YFinanceLoader
 from deepquant.workflows.elemtary_pricing_workflow import ElementaryPricingWorkflow
 
 # --- 1. Setup ---
-asset_ticker = '^GSPC'
+asset_ticker = 'SPY'
 evaluation_date = '2023-01-03'
 maturity_date = '2024-01-03'
 
@@ -118,18 +198,10 @@ workflow = ElementaryPricingWorkflow(
     data_loader=data_loader,
     models_dir=Path.cwd() / "models",
     risk_free_rate=0.05,
-
-    primal_learning_scale=8, # Scale up the learning ability of the primal.
-    # Higher scale results in a tighter bound, but require more computational resources and
-    # may be prone to overfitting if the num_paths and num_steps are not sufficiently large enough.
-    dual_learning_depth=2, # Deepen the learning ability of the dual.
-    # Greater depth results in a tighter bound, but requires more random access memory and
-    # computational resources. Setting the depth too high without sufficient paths or steps
-    # may result in wasted resources.
+    retrain_hurst_interval_days=30,
 
     force_model='bergomi', # Override the forecast and force the rough model
-    bergomi_static_params = { 'H': 0.1, "eta": 1.9, "rho": -0.9 } # Override the bergomi
-    # simulation parameters.
+    bergomi_static_params = { 'H': 0.4, "eta": 1.9, "rho": -0.9 } # Override the bergomi simulation parameters.
 )
 
 # Run the pricing process with custom, high-fidelity simulation parameters.
@@ -137,15 +209,18 @@ price_info, engine_results = workflow.price_option(
     strike=strike_price,
     maturity=maturity_date,
     option_type='put',
+    primal_uncertainty=0.8,
 
     exchange='NYSE',        # <-- Specify the exchange for which the asset is traded.
+    evaluation_date=evaluation_date,
 
-    num_paths=25_000,       # <-- Specify the number of volatility paths to compute.
-    num_steps=70,           # <-- Specify the number of steps each volatility path should take.
-    # Warning: Scaling num_steps beyond 100 and num_paths beyond 30_000 is
-    # random access memory-resource intensive even if dual_learning_depth=1
+    max_num_paths=300,       # <-- Specify the number of volatility paths to compute.
+    max_num_steps=5000,      # <-- Specify the number of steps each volatility path should take.
+    # Reduce these paramters in order to reduce resource usage.
 
-    evaluation_date=evaluation_date
+    # Note: Smaller values may mean that the primal process will have to run for longer in order to
+    # obtain a sufficiently small primal uncertainty on the confidence interval. It may also
+    # induce significant bias (ie: miss-pricing the deduced price). Use with caution
 )
 
 # --- 3. Display Results ---

@@ -31,6 +31,11 @@ class PriceDeducer:
         # The uncertainty is the radius of the price interval.
         uncertainty = (upper_bound - lower_bound) / 2.0
 
+        relative_gap = (upper_bound - lower_bound) / deduced_price
+
+        # if relative_gap > 0.005 and (deduced_price > 0.1):
+        #     raise ValueError("relative_gap should be less than 0.005")
+
         return {
             "deduced_price": deduced_price,
             "uncertainty": uncertainty

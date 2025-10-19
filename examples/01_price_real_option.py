@@ -2,9 +2,10 @@ from pathlib import Path
 
 import yfinance as yf
 import pandas as pd
-from datetime import date
+from datetime import date, datetime
 import numpy as np
 from typing import Union
+from scipy import stats
 
 # The user of your library only needs to import the high-level components.
 from src.deepquant.data.loader import YFinanceLoader
@@ -17,9 +18,7 @@ def price_american_option(
         maturity: Union[int, float, str, date],
         evaluation_date: Union[str, date] = None,
         option_type: str = 'put',
-        risk_free_rate: float = 0.05,
-        num_paths: int = 25_000,
-        num_steps: int = 70
+        risk_free_rate: float = 0.05
 ) -> dict:
     """
     High-level API to price an American option on a real-world asset
@@ -44,9 +43,7 @@ def price_american_option(
         models_dir=Path.cwd() / "models",
         risk_free_rate=risk_free_rate,
         retrain_hurst_interval_days=30,
-        primal_learning_scale=24,
-        dual_learning_depth=1,
-        # force_model='bergomi'
+        force_model='bergomi'
     )
 
     # Run the end-to-end pricing workflow.
@@ -54,9 +51,10 @@ def price_american_option(
         strike=strike,
         maturity=maturity,
         option_type=option_type,
-        num_paths=num_paths,
-        num_steps=num_steps,
-        evaluation_date=evaluation_date
+        primal_uncertainty=0.01,
+        evaluation_date=evaluation_date,
+        #max_num_steps=300,
+        #max_num_paths=300
     )
 
     # Combine and return a comprehensive set of results.
@@ -81,10 +79,10 @@ if __name__ == "__main__":
     # This is an example of how a user would call the main function.
 
     # Price a 1-year, at-the-money put option on the S&P 500 Index.
-    asset_ticker = '^GSPC'  # The Yahoo Finance ticker for the S&P 500
+    asset_ticker = 'SPY'  # The Yahoo Finance ticker for the S&P 500
 
     # Get the latest price to set a reasonable at-the-money strike
-    latest_price = yf.Ticker(asset_ticker).history(period='1d')['Close'][0]
+    latest_price = yf.Ticker(asset_ticker).history(period='10d', end='2025-10-04')['Close'][-1]
     # Round the strike to a clean number, e.g., nearest 50 points
     strike_price = round(latest_price / 50) * 50
 
@@ -92,7 +90,8 @@ if __name__ == "__main__":
     results = price_american_option(
         ticker=asset_ticker,
         strike=strike_price,
-        maturity=252  # Specify maturity in trading days
+        evaluation_date=datetime.strptime("2025-10-04", '%Y-%m-%d'),
+        maturity=2 * 21  # Specify maturity in trading days,
     )
 
     # Print a clean summary of the final results

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from sklearn.cluster import MiniBatchKMeans
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import TensorDataset, DataLoader
 from typing import Callable, Optional
@@ -107,6 +108,103 @@ class SimpleResNet(nn.Module):
         for block in self.blocks:
             x = block(x)
         return self.final_layer(x)
+
+
+# --- Helper Functions ---
+def _get_signature_dimension(truncation_level: int, path_dimension: int) -> int:
+    if path_dimension == 1:
+        return truncation_level
+    return (path_dimension ** (truncation_level + 1) - 1) // (path_dimension - 1)
+
+
+def _count_parameters(model: nn.Module) -> int:
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+# --- Memory Estimation Function ---
+def estimate_dual_solver_memory(
+        num_paths: int,
+        num_steps: int,
+        path_dimension: int,
+        truncation_level: int,
+        hidden_dim: int,
+        num_res_net_blocks: int,
+        overhead_factor: float = 1.8
+) -> float:
+    """
+    Estimates the worst-case peak memory usage for the DeepSignatureDualSolver.
+
+    This function provides a conservative, high-level estimate of the total memory
+    that might be reserved by the PyTorch process during a full run of the
+    dual solver. It calculates the theoretical peak active memory during the two
+    most intensive phases (data preparation and the training loop), takes the
+    maximum, and adds a buffer for framework overhead.
+
+    The calculation accounts for:
+    - Persistent tensors (e.g., all path signatures, payoffs).
+    - Temporary memory spikes during data preparation due to out-of-place operations.
+    - The neural network model, its gradients, and optimizer states (e.g., for Adam).
+    - The gradient of the main input tensor.
+    - A heuristic for intermediate activations and buffers used by the autograd engine.
+    - A final overhead factor for the PyTorch caching allocator.
+
+    Note: This is a heuristic and the true memory usage can vary based on
+    hardware and specific PyTorch/CUDA versions. For a definitive measurement,
+    use `torch.cuda.max_memory_allocated()`.
+
+    Args:
+        num_paths (int): Number of Monte Carlo paths.
+        num_steps (int): Number of time steps in each path.
+        path_dimension (int): The dimension of the SDE path (e.g., 2 for price+variance).
+        truncation_level (int): The signature truncation level.
+        hidden_dim (int): The hidden dimension of the ResNet.
+        num_res_net_blocks (int): The number of blocks in the ResNet.
+        overhead_factor (float, optional): A multiplier to account for framework
+            overhead and the caching allocator. Defaults to 1.15.
+
+    Returns:
+        float: The estimated worst-case peak memory requirement in Gigabytes (GB).
+    """
+    BYTES_PER_FLOAT = 4
+
+    # --- Common Calculations ---
+    sig_dim = _get_signature_dimension(truncation_level, path_dimension)
+    model = SimpleResNet(sig_dim, hidden_dim, 1, num_res_net_blocks, dropout_rate=0.5)
+    num_params = _count_parameters(model)
+
+    mem_all_integrands_base = num_paths * (num_steps - 1) * sig_dim * BYTES_PER_FLOAT
+    mem_payoffs = num_paths * num_steps * BYTES_PER_FLOAT
+
+    # --- Peak Memory Estimate for Phase 1: Data Preparation ---
+    # Heuristic: To account for temporary copies during scaling, we assume a
+    # peak of 3x the base size of the main signature tensor.
+    peak_prep_mem = (mem_all_integrands_base * 3) + mem_payoffs
+
+    # --- Peak Memory Estimate for Phase 2: Training Loop ---
+    # Memory for the model, its gradients, and the Adam optimizer states
+    mem_model_suite = num_params * BYTES_PER_FLOAT * 4
+
+    # Memory for the gradient of the input tensor (all_integrands_scaled)
+    mem_input_gradient = mem_all_integrands_base
+
+    # Memory for intermediate activations and autograd buffers (aggressive estimate)
+    peak_batch_size = num_paths * (num_steps - 1)
+    mem_activations = num_res_net_blocks * peak_batch_size * hidden_dim * BYTES_PER_FLOAT * 8
+
+    peak_train_mem = (
+            mem_all_integrands_base + mem_payoffs + mem_model_suite +
+            mem_input_gradient + mem_activations
+    )
+
+    # --- Final Calculation ---
+    # The true peak is the maximum of the two phases
+    peak_active_mem_bytes = max(peak_prep_mem, peak_train_mem)
+
+    # Apply an overhead factor for the PyTorch caching allocator
+    total_reserved_mem_bytes = peak_active_mem_bytes * overhead_factor
+
+    total_mem_gb = total_reserved_mem_bytes / (1024 ** 3)
+    return total_mem_gb
 
 # --- 2. The Deep Primal Solver ---
 
@@ -313,7 +411,7 @@ class DeepSignatureDualSolver(AbstractDualSolver):
     the martingale, avoiding the performance bottleneck of nested Python loops.
     """
 
-    def __init__(self, truncation_level: int, hidden_dim: int, learning_rate: float, max_epochs: int, patience: int,
+    def __init__(self, hidden_dim: int, learning_rate: float, max_epochs: int, patience: int,
                  tolerance: float, batch_size: Optional[int] = None, num_res_net_blocks: int = 1):
         r"""
         Initializes the DeepSignatureDualSolver with its architecture and training parameters.
@@ -332,7 +430,6 @@ class DeepSignatureDualSolver(AbstractDualSolver):
         that create the best martingale to minimize the expectation.
 
         Args:
-            truncation_level (int): The signature truncation level.
             hidden_dim (int): The width of the neural network's hidden layers.
             learning_rate (float): The initial learning rate for the Adam optimizer.
             max_epochs (int): The maximum number of training epochs.
@@ -342,7 +439,6 @@ class DeepSignatureDualSolver(AbstractDualSolver):
                 stochastic mini-batch gradient descent. If None, it will use the
                 faster full-batch vectorized approach. Defaults to None.
         """
-        self.truncation_level = truncation_level
         self.hidden_dim = hidden_dim
         self.lr = learning_rate
         self.max_epochs = max_epochs
@@ -351,35 +447,35 @@ class DeepSignatureDualSolver(AbstractDualSolver):
         self.batch_size = batch_size
         self.num_res_net_blocks = num_res_net_blocks
 
-    def solve(self, paths: torch.Tensor, dW: torch.Tensor, payoff_fn: Callable, **kwargs) -> float:
+    def solve(self, precomputed_vars: dict, payoff_fn: Callable, **kwargs) -> float:
         """
         Executes the dual pricing algorithm using either a full-batch or mini-batch approach.
         """
         # --- 1. Initialization and Pre-computation ---
+
+        paths = precomputed_vars["paths"]
+        payoffs = precomputed_vars["payoffs"]
+
+        signatures = precomputed_vars["signatures"]
+        signatures = signatures[:, :(signatures.shape[1] - 1), :].contiguous()
+        del precomputed_vars["signatures"]
+
+        dW = precomputed_vars["dW"]
+
         device, num_steps, num_paths = paths.device, paths.shape[1], paths.shape[0]
-        sig_dim = calculate_signatures(paths[:, :2, :], self.truncation_level).shape[1]
 
-        # Pre-compute all non-anticipative signatures once for efficiency.
-        print("Pre-computing all path signatures to create integrands...")
-        all_integrands_unscaled = torch.zeros(num_paths, num_steps - 1, sig_dim, device=device, dtype=torch.float32)
-        for t in range(num_steps - 1):
-            paths_slice = paths[:, :t + 1, :]
-            if paths_slice.shape[1] > 1:
-                all_integrands_unscaled[:, t, :] = calculate_signatures(paths_slice, self.truncation_level)
+        signatures = signatures.to(device, dtype=torch.float32)
+        dW = dW.to(device, dtype=torch.float32)
+        payoffs = payoffs.to(device, dtype=torch.float32)
 
-        # Apply a stable, non-anticipative scaling
-        final_time_integrands = all_integrands_unscaled[:, -1, :]
-        mean = final_time_integrands.mean(dim=0, keepdim=True)
-        std = final_time_integrands.std(dim=0, keepdim=True) + 1e-8
-        all_integrands_scaled = (all_integrands_unscaled - mean.unsqueeze(1)) / std.unsqueeze(1)
+        all_integrands_scaled = signatures
+        sig_dim = signatures.shape[2]
 
         # --- 2. Optimization Setup ---
         model = SimpleResNet(input_dim=sig_dim, hidden_dim=self.hidden_dim, output_dim=1, num_blocks=self.num_res_net_blocks,
-                             dropout_rate=0.5).to(device)
+                             dropout_rate=0).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=self.lr)
         scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
-        asset_paths = paths[:, :, 0]
-        payoffs = torch.stack([payoff_fn(asset_paths[:, t]) for t in range(num_steps)], dim=1)
         best_loss = float('inf')
         patience_counter = 0
 
@@ -407,8 +503,8 @@ class DeepSignatureDualSolver(AbstractDualSolver):
                     best_loss, patience_counter = loss.item(), 0
                 else:
                     patience_counter += 1
-                if (epoch + 1) % 20 == 0:
-                    print(f"  Epoch [{epoch + 1}/{self.max_epochs}], Loss (Upper Bound): {loss.item():.6f}")
+                #if (epoch + 1) % 20 == 0:
+                print(f"  Epoch [{epoch + 1}/{self.max_epochs}], Loss (Upper Bound): {loss.item():.6f}")
                 if patience_counter >= self.patience:
                     print(f"  -> Early stopping triggered at epoch {epoch + 1}.")
                     break
@@ -462,9 +558,9 @@ class DeepSignatureDualSolver(AbstractDualSolver):
                     best_loss, patience_counter = epoch_loss.item(), 0
                 else:
                     patience_counter += 1
-                if (epoch + 1) % 20 == 0:
-                    print(
-                        f"  Epoch [{epoch + 1}/{self.max_epochs}], Full-Batch Loss (Upper Bound): {epoch_loss.item():.6f}")
+                #if (epoch + 1) % 20 == 0:
+                print(
+                    f"  Epoch [{epoch + 1}/{self.max_epochs}], Full-Batch Loss (Upper Bound): {epoch_loss.item()}")
                 if patience_counter >= self.patience:
                     print(f"  -> Early stopping triggered at epoch {epoch + 1}.")
                     break
