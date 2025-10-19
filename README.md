@@ -14,7 +14,7 @@ For a deeper dive into the methodologies and advanced usage of the library, plea
 
 * [**`Neural Network Solvers`**](./docs/NN_THEORY.md)**:** The technical details driving the implementation of the neural network and kernel solvers.
 
-* [**`Challenges & Enhancements`**](./docs/NN_THEORY.md)**:** The technical details describing how challenges were uncovered and how enhancements were made to solve them.
+* [**`Challenges & Enhancements`**](./docs/ENHANCEMENTS.md)**:** The technical details describing how challenges were uncovered and how enhancements were made to solve them.
 
 * [**`Advanced Usage and Examples`**](https://www.google.com/search?q=ADVANCED_EXAMPLES.md)**:** Details other advanced usages of the library beyond what the `ElementaryPricingWorkflow` provides.
 
