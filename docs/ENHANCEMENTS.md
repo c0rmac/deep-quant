@@ -54,47 +54,6 @@ for t in range(num_steps):
 S_path = exp(log_S)
 ```
 
-## 3. Quantifying Uncertainty in the Primal and Dual Solvers
-
-### 3.1 The Inherent Challenge: Irreducible Noise in Rough Simulations
-
-The primary numerical challenge in this project stems not from a systematic bias (like overestimation) in the Longstaff-Schwartz algorithm, but from the fundamental nature of the rough volatility models we aim to simulate. Processes with a low Hurst parameter ($H < 0.5$), such as the rough Bergomi model, are characterized by extremely high variance and erratic paths.
-
-As a consequence, even with advanced variance reduction techniques like Randomized Quasi-Monte Carlo (RQMC), the Monte Carlo estimates for the option price **do not converge to a single, fixed point**. Instead, as we increase the number of simulation paths, the price estimates for both the primal (`lower_bound`) and dual (`upper_bound`) solvers begin to **oscillate within a stable confidence interval**. This oscillation is not a sign of failure; it is a correct reflection of the high degree of inherent, irreducible uncertainty in the underlying financial model.
-
-The challenge, therefore, is not to eliminate this oscillation, but to **accurately measure its bounds**.
-
-### 3.2 The Solution: An Ensemble Method for Robust Estimation
-
-To accurately estimate the range of the primal and dual values, we employ a robust **ensemble approach**. Instead of relying on the outcome of a single simulation, we run the entire high-quality simulation and pricing workflow multiple times in parallel to build a distribution of possible outcomes. This "poll of polls" approach acknowledges that a single stochastic simulation can be misleading.
-
-The workflow is as follows:
-
-1.  **Generate Independent Simulations**: We run the entire `simulate_paths_adaptive_rqmc` process `N` times (e.g., 10 times) in parallel. This produces `N` independent, high-quality, and internally converged sets of simulation paths.
-
-2.  **Price Each Simulation**: For each of the `N` sets of paths, we run the full `PricingEngine` once. This involves executing the **`LinearPrimalSolver`** and the `DeepSignatureDualSolver` to obtain a single, high-quality estimate for the `lower_bound` and `upper_bound` for that specific run.
-
-3.  **Create a Distribution**: At the end of this process, we have `N` distinct price intervals. For each run `i`, we calculate a midpoint price, 
-
-$$M_i = (\text{lower bound}_i + \text{upper bound}_i) / 2$$
-
-This gives us a final distribution of high-quality midpoint estimates, as well as distributions for the lower and upper bounds.
-
-
-
-### 3.3 Deriving the Final Price and Uncertainty Bounds
-
-This ensemble of results allows us to derive a final, definitive price estimate and a set of uncertainty bounds that correctly quantify the model's inherent randomness.
-
-| Metric                    | Calculation                                               |
-|:--------------------------|:----------------------------------------------------------|
-| **Final Midpoint Price**  | **Average of the `N` individual midpoint estimates.**     |
-| **Midpoint Price 95% CI** | 95% Confidence Interval of the `N` midpoint estimates.    |
-| **Lower Bound 95% CI**    | 95% Confidence Interval of the `N` lower-bound estimates. |
-| **Upper Bound 95% CI**    | 95% Confidence Interval of the `N` upper-bound estimates. |
-
-This approach provides a single, stable price to use for practical applications, while simultaneously providing a clear and statistically sound measure of the full range within which the true price is expected to lie, directly addressing the oscillation problem.
-
 ## 4. Accelerating Monte Carlo Convergence
 
 ### 4.1 The Problem: Slow Convergence and Estimate Oscillation
