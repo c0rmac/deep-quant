@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/example/deep-quant)
 
-**DeepQuant** is a modern, high-performance Python library for pricing American options under advanced stochastic volatility models. It combines state-of-the-art techniques from deep learning and rough path theory to provide accurate, reliable price bounds for complex derivatives.
+**DeepQuant** is a Python library for pricing American options under advanced stochastic volatility models. It combines state-of-the-art techniques from deep learning and rough path theory to provide accurate, reliable price bounds for complex derivatives.
 
 ## In-Depth Documentation 📚
 
